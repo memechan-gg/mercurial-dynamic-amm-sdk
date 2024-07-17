@@ -7,15 +7,17 @@ import {
   VaultIdl,
   PROGRAM_ID as VAULT_PROGRAM_ID,
 } from '@mercurial-finance/vault-sdk';
-import { AnchorProvider, BN, Program } from '@project-serum/anchor';
+import { AnchorProvider, BN, Program } from '@coral-xyz/anchor';
 import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
-  Token,
   TOKEN_PROGRAM_ID,
-  AccountInfo as AccountInfoInt,
-  AccountLayout,
-  u64,
   NATIVE_MINT,
+  getAssociatedTokenAddressSync,
+  getAssociatedTokenAddress,
+  createAssociatedTokenAccountInstruction,
+  createCloseAccountInstruction,
+  Account,
+  unpackAccount,
 } from '@solana/spl-token';
 import {
   AccountInfo,
@@ -39,7 +41,7 @@ import {
   METAPLEX_PROGRAM,
   SEEDS,
 } from './constants';
-import { ConstantProductSwap, StableSwap, SwapCurve, TradeDirection } from './curve';
+import { ConstantProductSwap, SwapCurve, TradeDirection } from './curve';
 import {
   AmmProgram,
   ConstantProductCurve,
@@ -93,7 +95,7 @@ export const getMinAmountWithSlippage = (amount: BN, slippageRate: number) => {
 };
 
 export const getAssociatedTokenAccount = async (tokenMint: PublicKey, owner: PublicKey) => {
-  return await Token.getAssociatedTokenAddress(ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID, tokenMint, owner, true);
+  return await getAssociatedTokenAddress(tokenMint, owner, true);
 };
 
 export const getOrCreateATAInstruction = async (
@@ -107,14 +109,7 @@ export const getOrCreateATAInstruction = async (
     toAccount = await getAssociatedTokenAccount(tokenMint, owner);
     const account = await connection.getAccountInfo(toAccount);
     if (!account) {
-      const ix = Token.createAssociatedTokenAccountInstruction(
-        ASSOCIATED_TOKEN_PROGRAM_ID,
-        TOKEN_PROGRAM_ID,
-        tokenMint,
-        toAccount,
-        owner,
-        payer || owner,
-      );
+      const ix = createAssociatedTokenAccountInstruction(payer || owner, toAccount, owner, tokenMint);
       return [toAccount, ix];
     }
     return [toAccount, undefined];
@@ -156,54 +151,17 @@ export const wrapSOLInstruction = (from: PublicKey, to: PublicKey, amount: bigin
 export const unwrapSOLInstruction = async (owner: PublicKey) => {
   const wSolATAAccount = await getAssociatedTokenAccount(NATIVE_MINT, owner);
   if (wSolATAAccount) {
-    const closedWrappedSolInstruction = Token.createCloseAccountInstruction(
-      TOKEN_PROGRAM_ID,
-      wSolATAAccount,
-      owner,
-      owner,
-      [],
-    );
+    const closedWrappedSolInstruction = createCloseAccountInstruction(wSolATAAccount, owner, owner);
     return closedWrappedSolInstruction;
   }
   return null;
 };
 
-export const deserializeAccount = (data: Buffer | undefined): AccountInfoInt | undefined => {
-  if (data == undefined || data.length == 0) {
+export const deserializeAccount = (data: AccountInfo<Buffer> | undefined): Account | undefined => {
+  if (!data) {
     return undefined;
   }
-
-  const accountInfo = AccountLayout.decode(data);
-  accountInfo.mint = new PublicKey(accountInfo.mint);
-  accountInfo.owner = new PublicKey(accountInfo.owner);
-  accountInfo.amount = u64.fromBuffer(accountInfo.amount);
-
-  if (accountInfo.delegateOption === 0) {
-    accountInfo.delegate = null;
-    accountInfo.delegatedAmount = new u64(0);
-  } else {
-    accountInfo.delegate = new PublicKey(accountInfo.delegate);
-    accountInfo.delegatedAmount = u64.fromBuffer(accountInfo.delegatedAmount);
-  }
-
-  accountInfo.isInitialized = accountInfo.state !== 0;
-  accountInfo.isFrozen = accountInfo.state === 2;
-
-  if (accountInfo.isNativeOption === 1) {
-    accountInfo.rentExemptReserve = u64.fromBuffer(accountInfo.isNative);
-    accountInfo.isNative = true;
-  } else {
-    accountInfo.rentExemptReserve = null;
-    accountInfo.isNative = false;
-  }
-
-  if (accountInfo.closeAuthorityOption === 0) {
-    accountInfo.closeAuthority = null;
-  } else {
-    accountInfo.closeAuthority = new PublicKey(accountInfo.closeAuthority);
-  }
-
-  return accountInfo;
+  return unpackAccount(new PublicKey(data.owner), data);
 };
 
 export const getOnchainTime = async (connection: Connection) => {
@@ -423,20 +381,7 @@ export const calculateSwapQuote = (inTokenMint: PublicKey, inAmountLamport: BN, 
   const { tokenAMint, tokenBMint } = poolState;
   invariant(inTokenMint.equals(tokenAMint) || inTokenMint.equals(tokenBMint), ERROR.INVALID_MINT);
 
-  let swapCurve: SwapCurve;
-  if ('stable' in poolState.curveType) {
-    const { amp, depeg, tokenMultiplier } = poolState.curveType['stable'] as any;
-    swapCurve = new StableSwap(
-      amp.toNumber(),
-      tokenMultiplier,
-      depeg,
-      depegAccounts,
-      new BN(currentTime),
-      poolState.stake,
-    );
-  } else {
-    swapCurve = new ConstantProductSwap();
-  }
+  let swapCurve: SwapCurve = new ConstantProductSwap();
 
   const vaultAWithdrawableAmount = calculateWithdrawableAmount(currentTime, vaultA);
   const vaultBWithdrawableAmount = calculateWithdrawableAmount(currentTime, vaultB);
@@ -750,13 +695,5 @@ export const DepegType = {
 };
 
 export function generateCurveType(tokenInfoA: TokenInfo, tokenInfoB: TokenInfo, isStable: boolean) {
-  return isStable
-    ? {
-        stable: {
-          amp: PERMISSIONLESS_AMP,
-          tokenMultiplier: computeTokenMultiplier(tokenInfoA.decimals, tokenInfoB.decimals),
-          depeg: { baseVirtualPrice: new BN(0), baseCacheUpdated: new BN(0), depegType: DepegType.none() },
-        },
-      }
-    : { constantProduct: {} };
+  return { constantProduct: {} };
 }
