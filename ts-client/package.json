@@ -14,7 +14,7 @@
   ],
   "dependencies": {
     "@coral-xyz/anchor": "0.28.0",
-    "@mercurial-finance/vault-sdk": "file:./../../mercurial-vault-sdk/ts-client/",
+    "@mercurial-finance/vault-sdk": "git+https://github.com/memechan-gg/mercurial-vault-sdk.git#develop",
     "@solana/spl-token": "^0.4.6",
     "@solana/spl-token-registry": "0.2.1105",
     "@solana/web3.js": "^1.91.8",
